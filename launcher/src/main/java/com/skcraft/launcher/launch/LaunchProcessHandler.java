@@ -36,7 +36,7 @@ public class LaunchProcessHandler implements Function<Process, ProcessConsoleFra
     @Override
     public ProcessConsoleFrame apply(final Process process) {
         log.info("Watching process " + process);
-
+        System.exit(0);
         try {
             SwingUtilities.invokeAndWait(new Runnable() {
                 @Override
@@ -45,7 +45,6 @@ public class LaunchProcessHandler implements Function<Process, ProcessConsoleFra
                     consoleFrame.setProcess(process);
                     consoleFrame.setVisible(false);
                     MessageLog messageLog = consoleFrame.getMessageLog();
-                    System.exit(0);
                     messageLog.consume(process.getInputStream());
                     messageLog.consume(process.getErrorStream());
                 }

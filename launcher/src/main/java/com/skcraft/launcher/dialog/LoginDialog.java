@@ -13,10 +13,14 @@ import com.skcraft.concurrency.ProgressObservable;
 import com.skcraft.launcher.Configuration;
 import com.skcraft.launcher.Launcher;
 import com.skcraft.launcher.auth.AuthenticationException;
+import com.skcraft.launcher.auth.OfflineSession;
 import com.skcraft.launcher.auth.Session;
 import com.skcraft.launcher.auth.YggdrasilLoginService;
 import com.skcraft.launcher.persistence.Persistence;
-import com.skcraft.launcher.swing.*;
+import com.skcraft.launcher.swing.FormPanel;
+import com.skcraft.launcher.swing.LinedBoxPanel;
+import com.skcraft.launcher.swing.SwingHelper;
+import com.skcraft.launcher.swing.TextFieldPopupMenu;
 import com.skcraft.launcher.util.SharedLocale;
 import com.skcraft.launcher.util.SwingExecutor;
 import lombok.Data;
@@ -38,21 +42,21 @@ import java.util.concurrent.Callable;
 public class LoginDialog extends JDialog {
 
     private final Launcher launcher;
-    @Getter private Session session;
-
     private final JLabel message = new JLabel(SharedLocale.tr("login.defaultMessage"));
     private final JTextField usernameText = new JTextField();
     private final JPasswordField passwordText = new JPasswordField();
     private final JButton loginButton = new JButton(SharedLocale.tr("login.login"));
-    private final LinkButton recoverButton = new LinkButton(SharedLocale.tr("login.recoverAccount"));
+    //private final LinkButton recoverButton = new LinkButton(SharedLocale.tr("login.recoverAccount"));
     private final JButton cancelButton = new JButton(SharedLocale.tr("button.cancel"));
     private final FormPanel formPanel = new FormPanel();
     private final LinedBoxPanel buttonsPanel = new LinedBoxPanel(true);
+    @Getter
+    private Session session;
 
     /**
      * Create a new login dialog.
      *
-     * @param owner the owner
+     * @param owner    the owner
      * @param launcher the launcher
      */
     public LoginDialog(Window owner, @NonNull Launcher launcher, Optional<ReloginDetails> reloginDetails) {
@@ -79,6 +83,16 @@ public class LoginDialog extends JDialog {
         reloginDetails.ifPresent(details -> message.setText(details.message));
     }
 
+    public static Session showLoginRequest(Window owner, Launcher launcher) {
+        return showLoginRequest(owner, launcher, null);
+    }
+
+    public static Session showLoginRequest(Window owner, Launcher launcher, ReloginDetails reloginDetails) {
+        LoginDialog dialog = new LoginDialog(owner, launcher, Optional.ofNullable(reloginDetails));
+        dialog.setVisible(true);
+        return dialog.getSession();
+    }
+
     @SuppressWarnings("unchecked")
     private void initComponents() {
         usernameText.setEditable(true);
@@ -90,7 +104,7 @@ public class LoginDialog extends JDialog {
         formPanel.addRow(new JLabel(SharedLocale.tr("login.password")), passwordText);
         buttonsPanel.setBorder(BorderFactory.createEmptyBorder(26, 13, 13, 13));
 
-        buttonsPanel.addElement(recoverButton);
+        //buttonsPanel.addElement(recoverButton);
         buttonsPanel.addGlue();
         buttonsPanel.addElement(loginButton);
         buttonsPanel.addElement(cancelButton);
@@ -102,8 +116,8 @@ public class LoginDialog extends JDialog {
 
         passwordText.setComponentPopupMenu(TextFieldPopupMenu.INSTANCE);
 
-        recoverButton.addActionListener(
-                ActionListeners.openURL(recoverButton, launcher.getProperties().getProperty("resetPasswordUrl")));
+        /*recoverButton.addActionListener(
+                ActionListeners.openURL(recoverButton, launcher.getProperties().getProperty("resetPasswordUrl")));*/
 
         loginButton.addActionListener(e -> prepareLogin());
         cancelButton.addActionListener(e -> dispose());
@@ -115,7 +129,7 @@ public class LoginDialog extends JDialog {
             String password = passwordText.getText();
 
             if (password == null || password.isEmpty()) {
-                SwingHelper.showErrorDialog(this, SharedLocale.tr("login.noPasswordError"), SharedLocale.tr("login.noPasswordTitle"));
+                setResult(new OfflineSession(usernameText.getText()));
             } else {
                 attemptLogin(usernameText.getText(), password);
             }
@@ -149,14 +163,10 @@ public class LoginDialog extends JDialog {
         dispose();
     }
 
-    public static Session showLoginRequest(Window owner, Launcher launcher) {
-        return showLoginRequest(owner, launcher, null);
-    }
-
-    public static Session showLoginRequest(Window owner, Launcher launcher, ReloginDetails reloginDetails) {
-        LoginDialog dialog = new LoginDialog(owner, launcher, Optional.ofNullable(reloginDetails));
-        dialog.setVisible(true);
-        return dialog.getSession();
+    @Data
+    public static class ReloginDetails {
+        private final String username;
+        private final String message;
     }
 
     @RequiredArgsConstructor
@@ -171,7 +181,7 @@ public class LoginDialog extends JDialog {
 
             // The presence of the identity (profile in Mojang terms) corresponds to whether the account
             // owns the game, so we need to check that
-            if (identity != null) {
+            if (password != null) {
                 // Set offline enabled flag to true
                 Configuration config = launcher.getConfig();
                 if (!config.isOfflineEnabled()) {
@@ -194,11 +204,5 @@ public class LoginDialog extends JDialog {
         public String getStatus() {
             return SharedLocale.tr("login.loggingInStatus");
         }
-    }
-
-    @Data
-    public static class ReloginDetails {
-        private final String username;
-        private final String message;
     }
 }

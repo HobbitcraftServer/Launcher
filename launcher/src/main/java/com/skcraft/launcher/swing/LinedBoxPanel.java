@@ -16,8 +16,7 @@ public class LinedBoxPanel extends JPanel {
 
     @Getter
     private final boolean horizontal;
-    @Getter
-    @Setter
+    @Getter @Setter
     private int spacing = 6;
     private boolean needsSpacer = false;
 

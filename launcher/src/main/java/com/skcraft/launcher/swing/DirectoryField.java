@@ -53,12 +53,12 @@ public class DirectoryField extends JPanel {
         return browseButton;
     }
 
-    public String getPath() {
-        return getTextField().getText();
-    }
-
     public void setPath(String path) {
         getTextField().setText(path);
+    }
+
+    public String getPath() {
+        return getTextField().getText();
     }
 
     protected JFileChooser getFileChooser() {
@@ -68,7 +68,8 @@ public class DirectoryField extends JPanel {
         chooser.setFileFilter(new FileFilter() {
             @Override
             public boolean accept(File pathname) {
-                return pathname.isDirectory();
+                if (pathname.isDirectory()) return true;
+                return false;
             }
 
             @Override

@@ -6,9 +6,10 @@
 
 package com.skcraft.launcher.swing;
 
-import javax.swing.*;
-import javax.swing.filechooser.FileFilter;
 import java.io.File;
+
+import javax.swing.JFileChooser;
+import javax.swing.filechooser.FileFilter;
 
 public class FileField extends DirectoryField {
 

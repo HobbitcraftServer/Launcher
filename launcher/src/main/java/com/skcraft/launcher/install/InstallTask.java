@@ -7,10 +7,9 @@
 package com.skcraft.launcher.install;
 
 import com.skcraft.concurrency.ProgressObservable;
-import com.skcraft.launcher.Launcher;
 
 public interface InstallTask extends ProgressObservable {
 
-    void execute(Launcher launcher) throws Exception;
+    void execute() throws Exception;
 
 }

@@ -42,17 +42,13 @@ public final class LauncherUtils {
         Properties prop = new Properties();
         try {
             InputStream in = closer.register(clazz.getResourceAsStream(name));
-            if (in != null) {
+            prop.load(in);
+            String extraPath = System.getProperty(extraProperty);
+            if (extraPath != null) {
+                log.info("Loading extra properties for " +
+                        clazz.getCanonicalName() + ":" + name + " from " + extraPath + "...");
+                in = closer.register(new BufferedInputStream(closer.register(new FileInputStream(extraPath))));
                 prop.load(in);
-                String extraPath = System.getProperty(extraProperty);
-                if (extraPath != null) {
-                    log.info("Loading extra properties for " +
-                            clazz.getCanonicalName() + ":" + name + " from " + extraPath + "...");
-                    in = closer.register(new BufferedInputStream(closer.register(new FileInputStream(extraPath))));
-                    prop.load(in);
-                }
-            } else {
-                throw new FileNotFoundException();
             }
         } finally {
             closer.close();
@@ -88,10 +84,6 @@ public final class LauncherUtils {
     public static void interruptibleDelete(File file, List<File> failures) throws IOException, InterruptedException {
         checkInterrupted();
 
-        if (!file.exists()) {
-            throw new FileNotFoundException("Does not exist: " + file);
-        }
-
         if (file.isDirectory()) {
             File[] files = file.listFiles();
 
@@ -102,11 +94,20 @@ public final class LauncherUtils {
             for (File f : files) {
                 interruptibleDelete(f, failures);
             }
-        }
 
-        if (!file.delete()) {
-            log.warning("Failed to delete " + file.getAbsolutePath());
-            failures.add(file);
+            if (!file.delete()) {
+                log.warning("Failed to delete " + file.getAbsolutePath());
+                failures.add(file);
+            }
+        } else {
+            if (!file.exists()) {
+                throw new FileNotFoundException("Does not exist: " + file);
+            }
+
+            if (!file.delete()) {
+                log.warning("Failed to delete " + file.getAbsolutePath());
+                failures.add(file);
+            }
         }
     }
 

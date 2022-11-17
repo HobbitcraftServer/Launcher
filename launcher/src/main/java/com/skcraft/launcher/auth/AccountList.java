@@ -1,78 +1,134 @@
+/*
+ * SK's Minecraft Launcher
+ * Copyright (C) 2010-2014 Albert Pham <http://www.sk89q.com> and contributors
+ * Please see LICENSE.txt for license information.
+ */
+
 package com.skcraft.launcher.auth;
 
+import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-import com.google.common.collect.Lists;
-import com.skcraft.launcher.dialog.component.ListListenerReducer;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.skcraft.launcher.persistence.Scrambled;
 import lombok.Getter;
-import lombok.Setter;
-import lombok.ToString;
-import org.apache.commons.lang.RandomStringUtils;
+import lombok.NonNull;
 
 import javax.swing.*;
-import javax.swing.event.ListDataEvent;
-import javax.swing.event.ListDataListener;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Iterator;
 import java.util.List;
 
 /**
- * Persisted account list
+ * A list of accounts that can be stored to disk.
  */
-@Scrambled("ACCOUNT_LIST_NOT_SECURITY!")
-@Getter
-@Setter
-@ToString
+@Scrambled("ACCOUNT_LIST")
 @JsonIgnoreProperties(ignoreUnknown = true)
-public class AccountList implements ListModel<SavedSession> {
-	private List<SavedSession> accounts = Lists.newArrayList();
-	private String clientId = RandomStringUtils.randomAlphanumeric(24);
+@JsonAutoDetect(
+        getterVisibility = JsonAutoDetect.Visibility.NONE,
+        setterVisibility = JsonAutoDetect.Visibility.NONE,
+        fieldVisibility = JsonAutoDetect.Visibility.NONE)
+public class AccountList extends AbstractListModel implements ComboBoxModel {
 
-	@JsonIgnore private final ListListenerReducer listeners = new ListListenerReducer();
+    @JsonProperty
+    @Getter
+    private List<Account> accounts = new ArrayList<Account>();
+    private transient Account selected;
 
-	public synchronized void add(SavedSession session) {
-		accounts.add(session);
+    /**
+     * Add a new account.
+     *
+     * <p>If there is already an existing account with the same ID, then the
+     * new account will not be added.</p>
+     *
+     * @param account the account to add
+     */
+    public synchronized void add(@NonNull Account account) {
+        if (!accounts.contains(account)) {
+            accounts.add(account);
+            Collections.sort(accounts);
+            fireContentsChanged(this, 0, accounts.size());
+        }
+    }
 
-		int index = accounts.size() - 1;
-		listeners.intervalAdded(new ListDataEvent(this, ListDataEvent.INTERVAL_ADDED, index, index));
-	}
+    /**
+     * Remove an account.
+     *
+     * @param account the account
+     */
+    public synchronized void remove(@NonNull Account account) {
+        Iterator<Account> it = accounts.iterator();
+        while (it.hasNext()) {
+            Account other = it.next();
+            if (other.equals(account)) {
+                it.remove();
+                fireContentsChanged(this, 0, accounts.size() + 1);
+                break;
+            }
+        }
+    }
 
-	public synchronized void remove(SavedSession session) {
-		int index = accounts.indexOf(session);
+    /**
+     * Set the list of accounts.
+     *
+     * @param accounts the list of accounts
+     */
+    public synchronized void setAccounts(@NonNull List<Account> accounts) {
+        this.accounts = accounts;
+        Collections.sort(accounts);
+    }
 
-		if (index > -1) {
-			accounts.remove(index);
-			listeners.intervalRemoved(new ListDataEvent(this, ListDataEvent.INTERVAL_REMOVED, index, index));
-		}
-	}
+    @Override
+    @JsonIgnore
+    public synchronized int getSize() {
+        return accounts.size();
+    }
 
-	public synchronized void update(SavedSession newSavedSession) {
-		int index = accounts.indexOf(newSavedSession);
+    @Override
+    public synchronized Account getElementAt(int index) {
+        try {
+            return accounts.get(index);
+        } catch (IndexOutOfBoundsException e) {
+            return null;
+        }
+    }
 
-		if (index > -1) {
-			accounts.set(index, newSavedSession);
-			listeners.contentsChanged(new ListDataEvent(this, ListDataEvent.CONTENTS_CHANGED, index, index));
-		} else {
-			this.add(newSavedSession);
-		}
-	}
+    @Override
+    public void setSelectedItem(Object item) {
+        if (item == null) {
+            selected = null;
+            return;
+        }
 
-	@Override
-	public int getSize() {
-		return accounts.size();
-	}
+        if (item instanceof Account) {
+            this.selected = (Account) item;
+        } else {
+            String id = String.valueOf(item).trim();
+            Account account = new Account(id);
+            for (Account test : accounts) {
+                if (test.equals(account)) {
+                    account = test;
+                    break;
+                }
+            }
+            selected = account;
+        }
 
-	@Override
-	public SavedSession getElementAt(int index) {
-		return accounts.get(index);
-	}
+        if (selected.getId() == null || selected.getId().isEmpty()) {
+            selected = null;
+        }
+    }
 
-	@Override
-	public void addListDataListener(ListDataListener l) {
-		listeners.addListDataListener(l);
-	}
+    @Override
+    @JsonIgnore
+    public Account getSelectedItem() {
+        return selected;
+    }
 
-	@Override
-	public void removeListDataListener(ListDataListener l) {
-		listeners.removeListDataListener(l);
-	}
+    public synchronized void forgetPasswords() {
+        for (Account account : accounts) {
+            account.setPassword(null);
+        }
+    }
 }

@@ -38,6 +38,11 @@ public class OfflineSession implements Session {
     }
 
     @Override
+    public String getClientToken() {
+        return "0";
+    }
+
+    @Override
     public String getAccessToken() {
         return "0";
     }
@@ -55,11 +60,6 @@ public class OfflineSession implements Session {
     @Override
     public UserType getUserType() {
         return UserType.LEGACY;
-    }
-
-    @Override
-    public byte[] getAvatarImage() {
-        return null;
     }
 
     @Override

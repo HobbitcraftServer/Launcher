@@ -15,9 +15,8 @@ import javax.swing.*;
 import javax.swing.event.ListSelectionEvent;
 import javax.swing.event.ListSelectionListener;
 import java.awt.*;
-import java.awt.event.ActionEvent;
-import java.awt.event.ActionListener;
 import java.util.List;
+
 
 import static javax.swing.BorderFactory.createEmptyBorder;
 
@@ -32,13 +31,11 @@ public class FeatureSelectionDialog extends JDialog {
     private final JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, componentsScroll, descScroll);
     private final LinedBoxPanel buttonsPanel = new LinedBoxPanel(true);
     private final JButton installButton = new JButton(SharedLocale.tr("features.install"));
-    private final Object receiver;
 
-    public FeatureSelectionDialog(Window owner, @NonNull List<Feature> features, Object receiver) {
+    public FeatureSelectionDialog(Window owner, @NonNull List<Feature> features) {
         super(owner, ModalityType.DOCUMENT_MODAL);
 
         this.features = features;
-        this.receiver = receiver;
 
         setTitle(SharedLocale.tr("features.title"));
         initComponents();
@@ -85,15 +82,7 @@ public class FeatureSelectionDialog extends JDialog {
             }
         });
 
-        installButton.addActionListener(new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                synchronized (receiver) {
-                    receiver.notifyAll();
-                }
-                FeatureSelectionDialog.this.dispose();
-            }
-        });
+        installButton.addActionListener(ActionListeners.dispose(this));
     }
 
     private void updateDescription() {

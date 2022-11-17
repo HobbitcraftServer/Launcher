@@ -46,11 +46,7 @@ public class ZipExtract implements Runnable {
             while ((entry = zis.getNextEntry()) != null) {
                 if (matches(entry)) {
                     File file = new File(getDestination(), entry.getName());
-                    if (entry.isDirectory()) {
-                        file.mkdirs();
-                    } else {
-                        writeEntry(zis, file);
-                    }
+                    writeEntry(zis, file);
                 }
             }
         } catch (IOException e) {

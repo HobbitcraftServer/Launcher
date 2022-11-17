@@ -3,45 +3,50 @@
  * Copyright (C) 2010-2014 Albert Pham <http://www.sk89q.com> and contributors
  * Please see LICENSE.txt for license information.
  */
-
 package com.skcraft.launcher.launch;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.base.Strings;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.io.Files;
 import com.skcraft.concurrency.DefaultProgress;
 import com.skcraft.concurrency.ProgressObservable;
 import com.skcraft.launcher.*;
+import static com.skcraft.launcher.LauncherUtils.checkInterrupted;
 import com.skcraft.launcher.auth.Session;
 import com.skcraft.launcher.install.ZipExtract;
-import com.skcraft.launcher.launch.runtime.JavaRuntime;
-import com.skcraft.launcher.launch.runtime.JavaRuntimeFinder;
-import com.skcraft.launcher.model.minecraft.*;
+import com.skcraft.launcher.model.minecraft.AssetsIndex;
+import com.skcraft.launcher.model.minecraft.Library;
+import com.skcraft.launcher.model.minecraft.VersionManifest;
 import com.skcraft.launcher.persistence.Persistence;
 import com.skcraft.launcher.util.Environment;
 import com.skcraft.launcher.util.Platform;
 import com.skcraft.launcher.util.SharedLocale;
-import lombok.Getter;
-import lombok.NonNull;
-import lombok.Setter;
-import lombok.extern.java.Log;
-import org.apache.commons.lang.text.StrSubstitutor;
 
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.lang.management.ManagementFactory;
+import java.lang.management.OperatingSystemMXBean;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.Callable;
-import java.util.concurrent.CancellationException;
-import java.util.function.BiPredicate;
-
-import static com.skcraft.launcher.LauncherUtils.checkInterrupted;
-import static com.skcraft.launcher.util.SharedLocale.tr;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import lombok.Getter;
+import lombok.NonNull;
+import lombok.Setter;
+import lombok.extern.java.Log;
+import nz.co.lolnet.james137137.LauncherGobalSettings;
+import nz.co.lolnet.james137137.MemoryChecker;
+import static nz.co.lolnet.james137137.MyLogger.log;
+import nz.co.lolnet.statistics.ThreadLaunchedModpack;
+import org.apache.commons.lang.text.StrSubstitutor;
+import org.json.simple.parser.ParseException;
 
 /**
  * Handles the launching of an instance.
@@ -56,8 +61,9 @@ public class Runner implements Callable<Process>, ProgressObservable {
     private final Instance instance;
     private final Session session;
     private final File extractDir;
-    private final BiPredicate<JavaRuntime, JavaVersion> javaRuntimeMismatch;
-    @Getter @Setter private Environment environment = Environment.getInstance();
+    @Getter
+    @Setter
+    private Environment environment = Environment.getInstance();
 
     private VersionManifest versionManifest;
     private AssetsIndex assetsIndex;
@@ -65,25 +71,21 @@ public class Runner implements Callable<Process>, ProgressObservable {
     private Configuration config;
     private JavaProcessBuilder builder;
     private AssetsRoot assetsRoot;
-    private FeatureList.Mutable featureList;
 
     /**
      * Create a new instance launcher.
-     *  @param launcher the launcher
+     *
+     * @param launcher the launcher
      * @param instance the instance
      * @param session the session
      * @param extractDir the directory to extract to
-     * @param javaRuntimeMismatch
      */
     public Runner(@NonNull Launcher launcher, @NonNull Instance instance,
-                  @NonNull Session session, @NonNull File extractDir,
-                  BiPredicate<JavaRuntime, JavaVersion> javaRuntimeMismatch) {
+            @NonNull Session session, @NonNull File extractDir) {
         this.launcher = launcher;
         this.instance = instance;
         this.session = session;
         this.extractDir = extractDir;
-        this.javaRuntimeMismatch = javaRuntimeMismatch;
-        this.featureList = new FeatureList.Mutable();
     }
 
     /**
@@ -101,6 +103,7 @@ public class Runner implements Callable<Process>, ProgressObservable {
 
     @Override
     public Process call() throws Exception {
+        System.out.println("======HELLLO===========");
         if (!instance.isInstalled()) {
             throw new LauncherException("Update required", SharedLocale.tr("runner.updateRequired"));
         }
@@ -120,12 +123,12 @@ public class Runner implements Callable<Process>, ProgressObservable {
             instance.setInstalled(false);
             Persistence.commitAndForget(instance);
             throw new LauncherException("Missing assets index " + assetsFile.getAbsolutePath(),
-                    tr("runner.missingAssetsIndex", instance.getTitle(), assetsFile.getAbsolutePath()));
+                    SharedLocale.tr("runner.missingAssetsIndex", instance.getTitle(), assetsFile.getAbsolutePath()));
         } catch (IOException e) {
             instance.setInstalled(false);
             Persistence.commitAndForget(instance);
             throw new LauncherException("Corrupt assets index " + assetsFile.getAbsolutePath(),
-                    tr("runner.corruptAssetsIndex", instance.getTitle(), assetsFile.getAbsolutePath()));
+                    SharedLocale.tr("runner.corruptAssetsIndex", instance.getTitle(), assetsFile.getAbsolutePath()));
         }
 
         // Copy over assets to the tree
@@ -140,21 +143,24 @@ public class Runner implements Callable<Process>, ProgressObservable {
         }
 
         progress = new DefaultProgress(0.9, SharedLocale.tr("runner.collectingArgs"));
+
+        addJvmArgs();
+        addLibraries();
+        addJarArgs();
+        addWindowArgs();
+        addPlatformArgs();
+
+        String launchCount = LauncherGobalSettings.get("InstanceLaunchCount_" + instance.getTitle());
+        if (launchCount.length() == 0) {
+            launchCount = Integer.toString(1);
+        } else {
+            launchCount = Integer.toString(Integer.parseInt(launchCount) + 1);
+        }
+        LauncherGobalSettings.put("InstanceLaunchCount_" + instance.getTitle(), launchCount);
         builder.classPath(getJarPath());
         builder.setMainClass(versionManifest.getMainClass());
 
-        addWindowArgs();
-        addLibraries();
-        addJvmArgs();
-        addJarArgs();
-        addProxyArgs();
-        addServerArgs();
-        addPlatformArgs();
-        addLegacyArgs();
-
         callLaunchModifier();
-
-        verifyJavaRuntime();
 
         ProcessBuilder processBuilder = new ProcessBuilder(builder.buildCommand());
         processBuilder.directory(instance.getContentDir());
@@ -162,6 +168,9 @@ public class Runner implements Callable<Process>, ProgressObservable {
         checkInterrupted();
 
         progress = new DefaultProgress(1, SharedLocale.tr("runner.startingJava"));
+
+        //cptwin, launcher statistics
+        new ThreadLaunchedModpack(instance.getTitle());
 
         return processBuilder.start();
     }
@@ -171,23 +180,6 @@ public class Runner implements Callable<Process>, ProgressObservable {
      */
     private void callLaunchModifier() {
         instance.modify(builder);
-    }
-
-    private void verifyJavaRuntime() {
-        JavaRuntime pickedRuntime = builder.getRuntime();
-        JavaVersion targetVersion = versionManifest.getJavaVersion();
-
-        if (pickedRuntime == null || targetVersion == null) {
-            return;
-        }
-
-        if (pickedRuntime.getMajorVersion() != targetVersion.getMajorVersion()) {
-            boolean launchAnyway = javaRuntimeMismatch.test(pickedRuntime, targetVersion);
-
-            if (!launchAnyway) {
-                throw new CancellationException("Launch cancelled by user.");
-            }
-        }
     }
 
     /**
@@ -202,6 +194,11 @@ public class Runner implements Callable<Process>, ProgressObservable {
                 builder.getFlags().add("-Xdock:name=Minecraft");
             }
         }
+
+        // Windows arguments
+        if (getEnvironment().getPlatform() == Platform.WINDOWS) {
+            builder.getFlags().add("-XX:HeapDumpPath=MojangTricksIntelDriversForPerformance_javaw.exe_minecraft.exe.heapdump");
+        }
     }
 
     /**
@@ -209,7 +206,8 @@ public class Runner implements Callable<Process>, ProgressObservable {
      */
     private void addLibraries() throws LauncherException {
         // Add libraries to classpath or extract the libraries as necessary
-        for (Library library : versionManifest.getLibraries()) {
+        LinkedHashSet<Library> libraries = versionManifest.getLibraries();
+        for (Library library : libraries) {
             if (!library.matches(environment)) {
                 continue;
             }
@@ -229,9 +227,11 @@ public class Runner implements Callable<Process>, ProgressObservable {
                 instance.setInstalled(false);
                 Persistence.commitAndForget(instance);
                 throw new LauncherException("Missing library " + library.getName(),
-                        tr("runner.missingLibrary", instance.getTitle(), library.getName()));
+                        SharedLocale.tr("runner.missingLibrary", instance.getTitle(), library.getName()));
             }
         }
+
+        builder.getFlags().add("-Djava.library.path=" + extractDir.getAbsoluteFile());
     }
 
     /**
@@ -239,83 +239,124 @@ public class Runner implements Callable<Process>, ProgressObservable {
      *
      * @throws IOException on I/O error
      */
-    private void addJvmArgs() throws IOException, LauncherException {
-        Optional<MemorySettings> memorySettings = Optional.ofNullable(instance.getSettings().getMemorySettings());
+    private void addJvmArgs() throws IOException {
+        try {
+            MemoryChecker.getMemoryInfoFromServer();
+        } catch (ParseException ex) {
+            Logger.getLogger(Runner.class.getName()).log(Level.SEVERE, null, ex);
+        }
+        log("Memory Checker starts here:");
+        log("modpack: " + instance.getName() + " " + instance.getVersion());
 
-        int minMemory = memorySettings
-                .map(MemorySettings::getMinMemory)
-                .orElse(config.getMinMemory());
-
-        int maxMemory = memorySettings
-                .map(MemorySettings::getMaxMemory)
-                .orElse(config.getMaxMemory());
-
+        log("intial vaules from config:");
+        int minMemory = config.getMinMemory();
+        int maxMemory = config.getMaxMemory();
         int permGen = config.getPermGen();
+        log("min: " + minMemory);
+        log("max: " + maxMemory);
+        log("permGen: " + permGen);
+        log("Don't Auto correct meoory: " + config.isDontAutoCorrectMemory());
 
-        if (minMemory <= 0) {
-            minMemory = 1024;
+        if (!config.isDontAutoCorrectMemory()) {
+            if (minMemory <= 0) {
+                minMemory = 1024;
+            }
+
+            if (maxMemory <= 0) {
+                maxMemory = 1024;
+            }
+
+            if (permGen <= 0) {
+                permGen = 128;
+            }
+
+            if (permGen <= 64) {
+                permGen = 64;
+            }
+
+            log("1st check with very low number or invailed:");
+            log("min: " + minMemory);
+            log("max: " + maxMemory);
+            log("permGen: " + permGen);
+
+            log("2nd check getting vaules from Lolnet WebServer:");
+
+            minMemory = MemoryChecker.checkMinMemory(minMemory, instance);
+            maxMemory = MemoryChecker.checkMaxMemory(maxMemory, instance);
+            permGen = MemoryChecker.checkpermGen(permGen, instance);
+
+            log("min: " + minMemory);
+            log("max: " + maxMemory);
+            log("permGen: " + permGen);
+
+            log("3nd check, checking machine memory:");
+            int currentfreeMemory = getCurrentFreeMemoryMB();
+            System.out.println(currentfreeMemory);
+            log("Current Free memory (MB):" + currentfreeMemory);
+            int memoryMB = currentfreeMemory;
+            System.out.println("1" + memoryMB);
+            if (currentfreeMemory > 0 && memoryMB < minMemory) {
+                memoryMB = ((memoryMB / 2) / 256) * 256;
+                System.out.println("2" + memoryMB);
+                minMemory = memoryMB;
+                if (memoryMB <= 512) {
+                    minMemory = 128;
+                }
+            }
+
+            if (minMemory > maxMemory) {
+                maxMemory = minMemory;
+            }
+            log("min: " + minMemory);
+            log("max: " + maxMemory);
+            log("permGen: " + permGen);
         }
 
-        if (maxMemory <= 0) {
-            maxMemory = 1024;
-        }
+        log("Final memory results");
+        log("min: " + minMemory);
+        log("max: " + maxMemory);
+        log("permGen: " + permGen);
 
-        if (permGen <= 0) {
-            permGen = 128;
-        }
-
-        if (permGen <= 64) {
-            permGen = 64;
-        }
-
-        if (minMemory > maxMemory) {
-            maxMemory = minMemory;
-        }
+        System.out.println(minMemory);
+        System.out.println(maxMemory);
+        System.out.println(permGen);
 
         builder.setMinMemory(minMemory);
         builder.setMaxMemory(maxMemory);
         builder.setPermGen(permGen);
 
-        JavaRuntime selectedRuntime = Optional.ofNullable(instance.getSettings().getRuntime())
-                .orElseGet(() -> Optional.ofNullable(versionManifest.getJavaVersion())
-                        .flatMap(JavaRuntimeFinder::findBestJavaRuntime)
-                        .orElse(config.getJavaRuntime())
-                );
-
-        // Builder defaults to the PATH `java` if the runtime is null
-        builder.setRuntime(selectedRuntime);
-
-        List<String> flags = builder.getFlags();
-        String[] rawJvmArgsList = new String[] {
-                config.getJvmArgs(),
-                instance.getSettings().getCustomJvmArgs()
-        };
-
-        for (String rawJvmArgs : rawJvmArgsList) {
-            if (!Strings.isNullOrEmpty(rawJvmArgs)) {
-                flags.addAll(JavaProcessBuilder.splitArgs(rawJvmArgs));
-            }
+        String rawJvmPath = config.getJvmPath();
+        if (!Strings.isNullOrEmpty(rawJvmPath)) {
+            builder.tryJvmPath(new File(rawJvmPath));
         }
 
-        List<GameArgument> javaArguments = versionManifest.getArguments().getJvmArguments();
-        StrSubstitutor substitutor = new StrSubstitutor(getCommandSubstitutions());
-        for (GameArgument arg : javaArguments) {
-            if (arg.shouldApply(environment, featureList)) {
-                for (String subArg : arg.getValues()) {
-                    flags.add(substitutor.replace(subArg));
+        String rawJvmArgs = config.getJvmArgs();
+        if (!Strings.isNullOrEmpty(rawJvmArgs)) {
+            List<String> flags = builder.getFlags();
+
+            for (String arg : JavaProcessBuilder.splitArgs(rawJvmArgs)) {
+                flags.add(arg);
+            }
+        }
+    }
+
+    private int getCurrentFreeMemoryMB() {
+        long currnetAmmount = -1;
+        OperatingSystemMXBean operatingSystemMXBean = ManagementFactory.getOperatingSystemMXBean();
+        for (Method method : operatingSystemMXBean.getClass().getDeclaredMethods()) {
+            method.setAccessible(true);
+            if (method.getName().startsWith("getFreePhysicalMemorySize")
+                    && Modifier.isPublic(method.getModifiers())) {
+
+                try {
+                    currnetAmmount = (Long) method.invoke(operatingSystemMXBean);
+                } catch (Exception e) {
                 }
-            }
-        }
+            } // if
+        } // for
 
-        if (versionManifest.getLogging() != null) {
-            log.info("Logging config present, log4j2 bug likely mitigated");
-
-            VersionManifest.LoggingConfig config = versionManifest.getLogging().getClient();
-            File configFile = new File(launcher.getLibrariesDir(), config.getFile().getId());
-            StrSubstitutor loggingSub = new StrSubstitutor(ImmutableMap.of("path", configFile.getAbsolutePath()));
-
-            flags.add(loggingSub.replace(config.getArgument()));
-        }
+        int memoryMB = (int) (currnetAmmount / (1024 * 1024));
+        return memoryMB;
     }
 
     /**
@@ -326,61 +367,10 @@ public class Runner implements Callable<Process>, ProgressObservable {
     private void addJarArgs() throws JsonProcessingException {
         List<String> args = builder.getArgs();
 
-        List<GameArgument> rawArgs = versionManifest.getArguments().getGameArguments();
+        String[] rawArgs = versionManifest.getMinecraftArguments().split(" +");
         StrSubstitutor substitutor = new StrSubstitutor(getCommandSubstitutions());
-        for (GameArgument arg : rawArgs) {
-            if (arg.shouldApply(environment, featureList)) {
-                for (String subArg : arg.getValues()) {
-                    args.add(substitutor.replace(subArg));
-                }
-            }
-        }
-    }
-
-    /**
-     * Add proxy arguments.
-     */
-    private void addProxyArgs() {
-        List<String> args = builder.getArgs();
-
-        if (config.isProxyEnabled()) {
-            String host = config.getProxyHost();
-            int port = config.getProxyPort();
-            String username = config.getProxyUsername();
-            String password = config.getProxyPassword();
-
-            if (!Strings.isNullOrEmpty(host) && port > 0 && port < 65535) {
-                args.add("--proxyHost");
-                args.add(config.getProxyHost());
-                args.add("--proxyPort");
-                args.add(String.valueOf(port));
-
-                if (!Strings.isNullOrEmpty(username)) {
-                    builder.getArgs().add("--proxyUser");
-                    builder.getArgs().add(username);
-                    builder.getArgs().add("--proxyPass");
-                    builder.getArgs().add(password);
-                }
-            }
-        }
-    }
-
-    /**
-     * Add server arguments.
-     */
-    private void addServerArgs() {
-        List<String> args = builder.getArgs();
-
-        if (config.isServerEnabled()) {
-            String host = config.getServerHost();
-            int port = config.getServerPort();
-
-            if (!Strings.isNullOrEmpty(host) && port > 0 && port < 65535) {
-                args.add("--server");
-                args.add(host);
-                args.add("--port");
-                args.add(String.valueOf(port));
-            }
+        for (String arg : rawArgs) {
+            args.add(substitutor.replace(arg));
         }
     }
 
@@ -388,42 +378,15 @@ public class Runner implements Callable<Process>, ProgressObservable {
      * Add window arguments.
      */
     private void addWindowArgs() {
+        List<String> args = builder.getArgs();
         int width = config.getWindowWidth();
+        int height = config.getWidowHeight();
 
         if (width >= 10) {
-            featureList.addFeature("has_custom_resolution", true);
-        }
-    }
-
-    /**
-     * Add arguments to make legacy Minecraft work.
-     */
-    private void addLegacyArgs() {
-        List<String> flags = builder.getFlags();
-
-        if (versionManifest.getMinimumLauncherVersion() < 21) {
-            // Add bits that the legacy manifests don't
-            flags.add("-Djava.library.path=" + extractDir.getAbsoluteFile());
-            flags.add("-cp");
-            flags.add(builder.buildClassPath());
-
-            if (featureList.hasFeature("has_custom_resolution")) {
-                List<String> args = builder.getArgs();
-                args.add("--width");
-                args.add(String.valueOf(config.getWindowWidth()));
-                args.add("--height");
-                args.add(String.valueOf(config.getWindowHeight()));
-            }
-
-            // Add old platform hacks that the new manifests already specify
-            if (getEnvironment().getPlatform() == Platform.WINDOWS) {
-                flags.add("-XX:HeapDumpPath=MojangTricksIntelDriversForPerformance_javaw.exe_minecraft.exe.heapdump");
-            }
-        }
-
-        if (versionManifest.getMinimumLauncherVersion() < 18) {
-            // TODO find out exactly what versions need this hack.
-            flags.add("-Dminecraft.applet.TargetDirectory=" + instance.getContentDir());
+            args.add("--width");
+            args.add(String.valueOf(width));
+            args.add("--height");
+            args.add(String.valueOf(height));
         }
     }
 
@@ -437,7 +400,6 @@ public class Runner implements Callable<Process>, ProgressObservable {
         Map<String, String> map = new HashMap<String, String>();
 
         map.put("version_name", versionManifest.getId());
-        map.put("version_type", launcher.getProperties().getProperty("launcherShortname"));
 
         map.put("auth_access_token", session.getAccessToken());
         map.put("auth_session", session.getSessionToken());
@@ -451,19 +413,7 @@ public class Runner implements Callable<Process>, ProgressObservable {
         map.put("game_directory", instance.getContentDir().getAbsolutePath());
         map.put("game_assets", virtualAssetsDir.getAbsolutePath());
         map.put("assets_root", launcher.getAssets().getDir().getAbsolutePath());
-        map.put("assets_index_name", versionManifest.getAssetId());
-
-        map.put("resolution_width", String.valueOf(config.getWindowWidth()));
-        map.put("resolution_height", String.valueOf(config.getWindowHeight()));
-
-        map.put("launcher_name", launcher.getTitle());
-        map.put("launcher_version", launcher.getVersion());
-        map.put("classpath", builder.buildClassPath());
-        map.put("natives_directory", extractDir.getAbsolutePath());
-
-        // Forge additions
-        map.put("library_directory", launcher.getLibrariesDir().getAbsolutePath());
-        map.put("classpath_separator", System.getProperty("path.separator"));
+        map.put("assets_index_name", versionManifest.getAssetsIndex());
 
         return map;
     }

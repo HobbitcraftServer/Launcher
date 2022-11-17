@@ -7,7 +7,7 @@
 package com.skcraft.launcher.install;
 
 import com.google.common.io.Files;
-import com.skcraft.launcher.Launcher;
+import com.skcraft.launcher.util.SharedLocale;
 import lombok.NonNull;
 import lombok.extern.java.Log;
 
@@ -15,7 +15,7 @@ import java.io.File;
 import java.io.IOException;
 import java.util.logging.Level;
 
-import static com.skcraft.launcher.util.SharedLocale.tr;
+
 
 @Log
 public class FileCopy implements InstallTask {
@@ -29,7 +29,7 @@ public class FileCopy implements InstallTask {
     }
 
     @Override
-    public void execute(Launcher launcher) throws IOException {
+    public void execute() throws IOException {
         log.log(Level.INFO, "Copying to {0} (from {1})...", new Object[]{to.getAbsoluteFile(), from.getName()});
         to.getParentFile().mkdirs();
         Files.copy(from, to);
@@ -42,7 +42,7 @@ public class FileCopy implements InstallTask {
 
     @Override
     public String getStatus() {
-        return tr("installer.copyingFile", from, to);
+        return SharedLocale.tr("installer.copyingFile", from, to);
     }
 
 }

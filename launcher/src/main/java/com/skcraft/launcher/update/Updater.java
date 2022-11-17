@@ -14,17 +14,12 @@ import com.skcraft.launcher.Instance;
 import com.skcraft.launcher.Launcher;
 import com.skcraft.launcher.LauncherException;
 import com.skcraft.launcher.install.Installer;
-import com.skcraft.launcher.model.minecraft.ReleaseList;
-import com.skcraft.launcher.model.minecraft.Version;
 import com.skcraft.launcher.model.minecraft.VersionManifest;
 import com.skcraft.launcher.model.modpack.Manifest;
 import com.skcraft.launcher.persistence.Persistence;
 import com.skcraft.launcher.util.HttpRequest;
+import static com.skcraft.launcher.util.HttpRequest.url;
 import com.skcraft.launcher.util.SharedLocale;
-import lombok.Getter;
-import lombok.NonNull;
-import lombok.Setter;
-import lombok.extern.java.Log;
 
 import java.io.File;
 import java.io.IOException;
@@ -34,8 +29,11 @@ import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.logging.Level;
-
-import static com.skcraft.launcher.util.HttpRequest.url;
+import lombok.Getter;
+import lombok.NonNull;
+import lombok.Setter;
+import lombok.extern.java.Log;
+import nz.co.lolnet.statistics.ThreadInstalledModpack;
 
 @Log
 public class Updater extends BaseUpdater implements Callable<Instance>, ProgressObservable {
@@ -68,17 +66,24 @@ public class Updater extends BaseUpdater implements Callable<Instance>, Progress
     public Instance call() throws Exception {
         log.info("Checking for an update for '" + instance.getName() + "'...");
 
-        // Force the directory to be created
-        instance.getContentDir();
-
         boolean updateRequired = !instance.isInstalled();
         boolean updateDesired = (instance.isUpdatePending() || updateRequired);
         boolean updateCapable = (instance.getManifestURL() != null);
 
         if (!online && updateRequired) {
-            log.info("Can't update " + instance.getTitle() + " because offline");
-            String message = SharedLocale.tr("updater.updateRequiredButOffline");
-            throw new LauncherException("Update required but currently offline", message);
+        log.info("Can't update " + instance.getTitle() + " because offline");
+        String message = SharedLocale.tr("updater.updateRequiredButOffline");
+        throw new LauncherException("Update required but currently offline", message);
+        }
+        
+        if(updateRequired)
+        {
+            //new install
+            new ThreadInstalledModpack(instance.getTitle(), instance.getVersion());
+        }
+        if(instance.isInstalled() && instance.isUpdatePending())
+        {
+            //modpack needs updating
         }
 
         if (updateDesired && !updateCapable) {
@@ -102,48 +107,26 @@ public class Updater extends BaseUpdater implements Callable<Instance>, Progress
         return instance;
     }
 
-    /**
-     * Check whether the package manifest contains an embedded version manifest,
-     * otherwise we'll have to download the one for the given Minecraft version.
-     *
-     * BACKWARDS COMPATIBILITY:
-     * Old manifests have an embedded version manifest without the minecraft JARs list present.
-     * If we find a manifest without that jar list, fetch the newer copy from launchermeta and use the list from that.
-     * We can't just replace the manifest outright because library versions might differ and that screws up Runner.
-     */
     private VersionManifest readVersionManifest(Manifest manifest) throws IOException, InterruptedException {
+        // Check whether the package manifest contains an embedded version manifest,
+        // otherwise we'll have to download the one for the given Minecraft version
         VersionManifest version = manifest.getVersionManifest();
-        URL url = url(launcher.getProperties().getProperty("versionManifestUrl"));
+        if (version != null) {
+            mapper.writeValue(instance.getVersionPath(), version);
+            return version;
+        } else {
+            URL url = url(String.format(
+                    launcher.getProperties().getProperty("versionManifestUrl"),
+                    manifest.getGameVersion()));
 
-        if (version == null) {
-            version = fetchVersionManifest(url, manifest);
+            return HttpRequest
+                    .get(url)
+                    .execute()
+                    .expectResponseCode(200)
+                    .returnContent()
+                    .saveContent(instance.getVersionPath())
+                    .asJson(VersionManifest.class);
         }
-
-        if (version.getDownloads().isEmpty()) {
-            // Backwards compatibility hack
-            VersionManifest otherManifest = fetchVersionManifest(url, manifest);
-
-            version.setDownloads(otherManifest.getDownloads());
-            version.setAssetIndex(otherManifest.getAssetIndex());
-        }
-
-        mapper.writeValue(instance.getVersionPath(), version);
-        return version;
-    }
-
-    private static VersionManifest fetchVersionManifest(URL url, Manifest manifest) throws IOException, InterruptedException {
-        ReleaseList releases = HttpRequest.get(url)
-                .execute()
-                .expectResponseCode(200)
-                .returnContent()
-                .asJson(ReleaseList.class);
-
-        Version relVersion = releases.find(manifest.getGameVersion());
-        return HttpRequest.get(url(relVersion.getUrl()))
-                .execute()
-                .expectResponseCode(200)
-                .returnContent()
-                .asJson(VersionManifest.class);
     }
 
     /**
@@ -176,10 +159,9 @@ public class Updater extends BaseUpdater implements Callable<Instance>, Progress
 
         // Install the .jar
         File jarPath = launcher.getJarPath(version);
-        VersionManifest.Artifact clientJar = version.getDownloads().get("client");
-        URL jarSource = url(clientJar.getUrl());
+        URL jarSource = launcher.propUrl("jarUrl", version.getId());
         log.info("JAR at " + jarPath.getAbsolutePath() + ", fetched from " + jarSource);
-        installJar(installer, clientJar, jarPath, jarSource);
+        installJar(installer, jarPath, jarSource);
 
         // Download libraries
         log.info("Enumerating libraries to download...");
@@ -187,16 +169,16 @@ public class Updater extends BaseUpdater implements Callable<Instance>, Progress
         URL url = manifest.getLibrariesUrl();
         if (url != null) {
             log.info("Added library source: " + url);
-            librarySources.add(0, url);
+            librarySources.add(url);
         }
 
         progress = new DefaultProgress(-1, SharedLocale.tr("instanceUpdater.collectingLibraries"));
-        installLibraries(installer, manifest, launcher.getLibrariesDir(), librarySources);
+        installLibraries(installer, version, launcher.getLibrariesDir(), librarySources);
 
         // Download assets
         log.info("Enumerating assets to download...");
         progress = new DefaultProgress(-1, SharedLocale.tr("instanceUpdater.collectingAssets"));
-        installAssets(installer, version, url(version.getAssetIndex().getUrl()), assetsSources);
+        installAssets(installer, version, launcher.propUrl("assetsIndexUrl", version.getAssetsIndex()), assetsSources);
 
         log.info("Executing download phase...");
         progress = ProgressFilter.between(installer.getDownloader(), 0, 0.98);
@@ -204,9 +186,7 @@ public class Updater extends BaseUpdater implements Callable<Instance>, Progress
 
         log.info("Executing install phase...");
         progress = ProgressFilter.between(installer, 0.98, 1);
-        installer.execute(launcher);
-
-        installer.executeLate(launcher);
+        installer.execute();
 
         log.info("Completing...");
         complete();

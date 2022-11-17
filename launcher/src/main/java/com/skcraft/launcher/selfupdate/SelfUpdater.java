@@ -3,7 +3,6 @@
  * Copyright (C) 2010-2014 Albert Pham <http://www.sk89q.com> and contributors
  * Please see LICENSE.txt for license information.
  */
-
 package com.skcraft.launcher.selfupdate;
 
 import com.skcraft.concurrency.DefaultProgress;
@@ -19,8 +18,11 @@ import java.net.URL;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import nz.co.lolnet.james137137.LauncherGobalSettings;
 
 public class SelfUpdater implements Callable<File>, ProgressObservable {
+
+    public static boolean updatedAlready = false;
 
     private final Launcher launcher;
     private final URL url;
@@ -39,8 +41,9 @@ public class SelfUpdater implements Callable<File>, ProgressObservable {
 
         try {
             File dir = launcher.getLauncherBinariesDir();
-            File file = new File(dir, System.currentTimeMillis() + ".jar");
-            File tempFile = installer.getDownloader().download(url, "", 10000, "launcher.jar");
+            File file = new File(dir, String.valueOf(System.currentTimeMillis()) + ".jar");
+            String filePath = file.getAbsolutePath();
+            File tempFile = installer.getDownloader().download(url, "", 10000, "LolnetLauncher.jar");
 
             progress = installer.getDownloader();
             installer.download();
@@ -48,8 +51,10 @@ public class SelfUpdater implements Callable<File>, ProgressObservable {
             installer.queue(new FileMover(tempFile, file));
 
             progress = installer;
-            installer.execute(launcher);
+            installer.execute();
 
+            updatedAlready = true;
+            LauncherGobalSettings.put("LolnetLauncherLatestUpdate", filePath);
             return file;
         } finally {
             executor.shutdownNow();

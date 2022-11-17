@@ -6,22 +6,23 @@
 
 package com.skcraft.launcher;
 
+import com.google.common.io.Files;
 import com.skcraft.concurrency.ProgressObservable;
 import com.skcraft.launcher.model.minecraft.Asset;
 import com.skcraft.launcher.model.minecraft.AssetsIndex;
 import com.skcraft.launcher.model.minecraft.VersionManifest;
 import com.skcraft.launcher.persistence.Persistence;
+import com.skcraft.launcher.util.SharedLocale;
 import lombok.Getter;
 import lombok.NonNull;
 import lombok.extern.java.Log;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.file.Files;
 import java.util.Map;
 import java.util.logging.Level;
 
-import static com.skcraft.launcher.util.SharedLocale.tr;
+
 
 /**
  * Represents a directory that stores assets for Minecraft. The class has
@@ -50,7 +51,7 @@ public class AssetsRoot {
      * @return the file, which may not exist
      */
     public File getIndexPath(VersionManifest versionManifest) {
-        return new File(dir, "indexes/" + versionManifest.getAssetId() + ".json");
+        return new File(dir, "indexes/" + versionManifest.getAssetsIndex() + ".json");
     }
 
     /**
@@ -75,11 +76,11 @@ public class AssetsRoot {
      * @throws LauncherException
      */
     public AssetsTreeBuilder createAssetsBuilder(@NonNull VersionManifest versionManifest) throws LauncherException {
-        String indexId = versionManifest.getAssetId();
+        String indexId = versionManifest.getAssetsIndex();
         File path = getIndexPath(versionManifest);
         AssetsIndex index = Persistence.read(path, AssetsIndex.class, true);
         if (index == null || index.getObjects() == null) {
-            throw new LauncherException("Missing index at " + path, tr("assets.missingIndex", path.getAbsolutePath()));
+            throw new LauncherException("Missing index at " + path, SharedLocale.tr("assets.missingIndex", path.getAbsolutePath()));
         }
         File treeDir = new File(dir, "virtual/" + indexId);
         treeDir.mkdirs();
@@ -101,7 +102,6 @@ public class AssetsRoot {
         public File build() throws IOException, LauncherException {
             AssetsRoot.log.info("Building asset virtual tree at '" + destDir.getAbsolutePath() + "'...");
 
-            boolean supportsLinks = true;
             for (Map.Entry<String, Asset> entry : index.getObjects().entrySet()) {
                 File objectPath = getObjectPath(entry.getValue());
                 File virtualPath = new File(destDir, entry.getKey());
@@ -111,21 +111,11 @@ public class AssetsRoot {
                             objectPath.getAbsolutePath(), virtualPath.getAbsolutePath()});
 
                     if (!objectPath.exists()) {
-                        String message = tr("assets.missingObject", objectPath.getAbsolutePath());
+                        String message = SharedLocale.tr("assets.missingObject", objectPath.getAbsolutePath());
                         throw new LauncherException("Missing object " + objectPath.getAbsolutePath(), message);
                     }
 
-                    if (supportsLinks) {
-                        try {
-                            Files.createLink(virtualPath.toPath(), objectPath.toPath());
-                        } catch (UnsupportedOperationException e) {
-                            supportsLinks = false;
-                        }
-                    }
-
-                    if (!supportsLinks) {
-                        Files.copy(objectPath.toPath(), virtualPath.toPath());
-                    }
+                    Files.copy(objectPath, virtualPath);
                 }
                 processed++;
             }
@@ -145,9 +135,9 @@ public class AssetsRoot {
         @Override
         public String getStatus() {
             if (count == 0) {
-                return tr("assets.expanding1", count, count - processed);
+                return SharedLocale.tr("assets.expanding1", count, count - processed);
             } else {
-                return tr("assets.expandingN", count, count - processed);
+                return SharedLocale.tr("assets.expandingN", count, count - processed);
             }
         }
     }

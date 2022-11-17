@@ -12,6 +12,8 @@ import com.skcraft.launcher.util.SharedLocale;
 import javax.swing.table.AbstractTableModel;
 import java.util.List;
 
+
+
 public class FeatureTableModel extends AbstractTableModel {
 
     private final List<Feature> features;
@@ -46,7 +48,7 @@ public class FeatureTableModel extends AbstractTableModel {
     public void setValueAt(Object value, int rowIndex, int columnIndex) {
         switch (columnIndex) {
             case 0:
-                features.get(rowIndex).setSelected((Boolean) value);
+                features.get(rowIndex).setSelected((boolean) (Boolean) value);
                 break;
             case 1:
             default:

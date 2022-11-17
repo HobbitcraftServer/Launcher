@@ -1,3 +1,4 @@
-rootProject.name = 'launcher-parent'
+rootProject.name = 'lolnetLauncher'
+include ':Launcher'
 
-include 'launcher','launcher-reddit', 'launcher-fancy', 'launcher-builder', 'launcher-bootstrap', 'creator-tools'
+project(':Launcher').projectDir = "$rootDir/Launcher" as File

@@ -3,70 +3,96 @@
  * Copyright (C) 2010-2014 Albert Pham <http://www.sk89q.com> and contributors
  * Please see LICENSE.txt for license information.
  */
-
 package com.skcraft.launcher;
 
 import com.beust.jcommander.JCommander;
 import com.beust.jcommander.ParameterException;
 import com.google.common.base.Strings;
-import com.google.common.base.Supplier;
 import com.google.common.util.concurrent.ListeningExecutorService;
 import com.google.common.util.concurrent.MoreExecutors;
-import com.skcraft.launcher.auth.*;
+import com.skcraft.launcher.auth.AccountList;
+import com.skcraft.launcher.auth.LoginService;
+import com.skcraft.launcher.auth.YggdrasilLoginService;
+import com.skcraft.launcher.dialog.LauncherFrame;
 import com.skcraft.launcher.launch.LaunchSupervisor;
-import com.skcraft.launcher.model.minecraft.Library;
 import com.skcraft.launcher.model.minecraft.VersionManifest;
 import com.skcraft.launcher.persistence.Persistence;
 import com.skcraft.launcher.swing.SwingHelper;
-import com.skcraft.launcher.update.UpdateManager;
-import com.skcraft.launcher.util.Environment;
 import com.skcraft.launcher.util.HttpRequest;
 import com.skcraft.launcher.util.SharedLocale;
 import com.skcraft.launcher.util.SimpleLogFormatter;
+
 import com.sun.management.OperatingSystemMXBean;
-import lombok.Getter;
-import lombok.NonNull;
-import lombok.Setter;
-import lombok.extern.java.Log;
-import org.apache.commons.io.FileUtils;
 
 import javax.swing.*;
-import java.awt.*;
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileFilter;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
 import java.io.UnsupportedEncodingException;
 import java.lang.management.ManagementFactory;
+import java.net.HttpURLConnection;
+import java.net.URISyntaxException;
 import java.net.URL;
+import java.net.URLConnection;
 import java.net.URLEncoder;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.Locale;
 import java.util.Properties;
 import java.util.concurrent.Executors;
 import java.util.logging.Level;
+import java.util.logging.Logger;
 
-import static com.skcraft.launcher.util.SharedLocale.tr;
+import lombok.Getter;
+import lombok.NonNull;
+import lombok.extern.java.Log;
+import nz.co.lolnet.james137137.CertificateManager;
+import nz.co.lolnet.james137137.FeedbackManager;
+import static nz.co.lolnet.james137137.HelpAndSupport.downloadTextFromUrl;
+import nz.co.lolnet.james137137.LauncherGobalSettings;
+import nz.co.lolnet.james137137.WebUtil;
+import nz.co.lolnet.statistics.ThreadLauncherIsLaunched;
+import nz.co.lolnet.statistics.MetaData;
+import org.apache.commons.io.FileUtils;
 
 /**
  * The main entry point for the launcher.
  */
 @Log
 public final class Launcher {
-
-    public static final int PROTOCOL_VERSION = 3;
-
+    
+    public static final boolean debugmode = false;
+    public static boolean hungerDrive = false;
+    public static final int PROTOCOL_VERSION = 2;
+    public static String modPackURL;
+    public static Launcher instance;
+    
     @Getter
     private final ListeningExecutorService executor = MoreExecutors.listeningDecorator(Executors.newCachedThreadPool());
-    @Getter @Setter private Supplier<Window> mainWindowSupplier = new DefaultLauncherSupplier(this);
-    @Getter private final File baseDir;
-    @Getter private final Properties properties;
-    @Getter private final InstanceList instances;
-    @Getter private final Configuration config;
-    @Getter private final AccountList accounts;
-    @Getter private final AssetsRoot assets;
-    @Getter private final LaunchSupervisor launchSupervisor = new LaunchSupervisor(this);
-    @Getter private final UpdateManager updateManager = new UpdateManager(this);
-    @Getter private final InstanceTasks instanceTasks = new InstanceTasks(this);
-    private final Environment env = Environment.getInstance();
+    @Getter
+    private final File baseDir;
+    @Getter
+    private final Properties properties;
+    @Getter
+    private final InstanceList instances;
+    @Getter
+    private final Configuration config;
+    @Getter
+    private final AccountList accounts;
+    @Getter
+    private final AssetsRoot assets;
+    @Getter
+    private final LaunchSupervisor launchSupervisor = new LaunchSupervisor(this);
+    
+    public static File dataDir;
+    public static File launcherJarFile;
+    
+    public static String mainServerURL;
+    public static String backupServerURL;
 
     /**
      * Create a new launcher instance with the given base directory.
@@ -75,37 +101,112 @@ public final class Launcher {
      * @throws java.io.IOException on load error
      */
     public Launcher(@NonNull File baseDir) throws IOException {
-        this(baseDir, baseDir);
-    }
-
-    /**
-     * Create a new launcher instance with the given base and configuration
-     * directories.
-     *
-     * @param baseDir the base directory
-     * @param configDir the config directory
-     * @throws java.io.IOException on load error
-     */
-    public Launcher(@NonNull File baseDir, @NonNull File configDir) throws IOException {
+        
+        instance = this;
+        new ThreadLauncherIsLaunched();
+        
         SharedLocale.loadBundle("com.skcraft.launcher.lang.Launcher", Locale.getDefault());
-
-        this.baseDir = baseDir.getAbsoluteFile();
+        
+        this.baseDir = baseDir;
         this.properties = LauncherUtils.loadProperties(Launcher.class, "launcher.properties", "com.skcraft.launcher.propertiesFile");
         this.instances = new InstanceList(this);
         this.assets = new AssetsRoot(new File(baseDir, "assets"));
-        this.config = Persistence.load(new File(configDir, "config.json"), Configuration.class);
-        this.accounts = Persistence.load(new File(configDir, "accounts.dat"), AccountList.class);
-
+        this.config = Persistence.load(new File(baseDir, "config.json"), Configuration.class);
+        config.setupJVMPath();
+        config.setupJVMargs();
+        config.setupMemory();
+        config.checkVaules();
+        mainServerURL = getProperties().getProperty("mainServerURL");
+        backupServerURL = getProperties().getProperty("backupServerURL");
+        this.accounts = Persistence.load(new File(baseDir, "accounts.dat"), AccountList.class);
+        
         setDefaultConfig();
-
+        
+        if (accounts.getSize() > 0) {
+            accounts.setSelectedItem(accounts.getElementAt(0));
+        }
+        
+        FeedbackManager.setupAccountList();
+        new MetaData();
+        
         executor.submit(new Runnable() {
             @Override
             public void run() {
                 cleanupExtractDir();
             }
         });
-
-        updateManager.checkForUpdate();
+    }
+    
+    public static URL checkURL(URL url) {
+        if (true) {
+            return url;
+        }
+        try {
+            HttpURLConnection huc = (HttpURLConnection) url.openConnection();
+            if (huc.getResponseCode() == 404) {
+                url = new URL(url.toString().replace(Launcher.mainServerURL, Launcher.backupServerURL));
+            }
+        } catch (IOException ex) {
+            Logger.getLogger(Launcher.class.getName()).log(Level.SEVERE, null, ex);
+        }
+        return url;
+    }
+    
+    public static boolean restartLauncher() {
+        String boot = LauncherGobalSettings.get("LolnetLauncherbootstrap");
+        if (boot != null && boot.equals("true")) {
+            String bootLocation = LauncherGobalSettings.get("LolnetLauncherbootstrapLocation");
+            if (bootLocation.toLowerCase().contains("exe") || bootLocation.toLowerCase().contains("jar")) {
+                Runtime rt = Runtime.getRuntime();
+                
+                String path = "java";
+                String javaHome = System.getProperty("java.home");
+                File file = new File(javaHome, "bin" + File.separator + "java.exe");
+                if (!file.exists()) {
+                    file = new File(javaHome, "bin" + File.separator + "java");
+                    
+                }
+                if (file.exists()) {
+                    path = file.getAbsolutePath();
+                }
+                
+                String command = path + " -jar " + "\"" + bootLocation + "\"";
+                try {
+                    Process pr = rt.exec(command);
+                    System.exit(0);
+                } catch (IOException ex) {
+                    
+                    Logger.getLogger(Launcher.class.getName()).log(Level.SEVERE, null, ex);
+                    return false;
+                }
+            } else {
+                return false;
+            }
+            
+        } else {
+            String bootLocation;
+            try {
+                bootLocation = new File(Launcher.class.getProtectionDomain().getCodeSource().getLocation().toURI().getPath()).getAbsolutePath();
+            } catch (URISyntaxException ex) {
+                Logger.getLogger(Launcher.class.getName()).log(Level.SEVERE, null, ex);
+                return false;
+            }
+            if (bootLocation.toLowerCase().contains("exe") || bootLocation.toLowerCase().contains("jar")) {
+                Runtime rt = Runtime.getRuntime();
+                String command = "java -jar " + "\"" + bootLocation + "\"";
+                try {
+                    Process pr = rt.exec(command);
+                    System.exit(0);
+                } catch (IOException ex) {
+                    
+                    Logger.getLogger(Launcher.class.getName()).log(Level.SEVERE, null, ex);
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -115,7 +216,7 @@ public final class Launcher {
         double configMax = config.getMaxMemory() / 1024.0;
         double suggestedMax = 2;
         double available = Double.MAX_VALUE;
-
+        
         try {
             OperatingSystemMXBean bean = (OperatingSystemMXBean) ManagementFactory.getOperatingSystemMXBean();
             available = bean.getTotalPhysicalMemorySize() / 1024.0 / 1024.0 / 1024.0;
@@ -126,19 +227,10 @@ public final class Launcher {
             }
         } catch (Exception ignored) {
         }
-
+        
         if (config.getMaxMemory() <= 0 || configMax >= available - 1) {
             config.setMaxMemory((int) (suggestedMax * 1024));
         }
-    }
-
-    /**
-     * Get the launcher title.
-     *
-     * @return The launcher title.
-     */
-    public String getTitle() {
-        return tr("launcher.appTitle");
     }
 
     /**
@@ -155,29 +247,12 @@ public final class Launcher {
     }
 
     /**
-     * Get the Yggdrasil login service.
+     * Get a login service.
      *
-     * @return the Yggdrasil (legacy) login service
+     * @return a login service
      */
-    public YggdrasilLoginService getYggdrasil() {
-        return new YggdrasilLoginService(HttpRequest.url(getProperties().getProperty("yggdrasilAuthUrl")), accounts.getClientId());
-    }
-
-    /**
-     * Get the Microsoft login service.
-     *
-     * @return the Microsoft (current) login service
-     */
-    public MicrosoftLoginService getMicrosoftLogin() {
-        return new MicrosoftLoginService(getProperties().getProperty("microsoftClientId"));
-    }
-
-    public LoginService getLoginService(UserType type) {
-        if (type == UserType.MICROSOFT) {
-            return getMicrosoftLogin();
-        } else {
-            return getYggdrasil();
-        }
+    public LoginService getLoginService() {
+        return new YggdrasilLoginService(HttpRequest.url(getProperties().getProperty("yggdrasilAuthUrl")));
     }
 
     /**
@@ -221,9 +296,9 @@ public final class Launcher {
      */
     public void cleanupExtractDir() {
         log.info("Cleaning up temporary extracted files directory...");
-
+        
         final long now = System.currentTimeMillis();
-
+        
         File[] dirs = getExtractDir().listFiles(new FileFilter() {
             @Override
             public boolean accept(File pathname) {
@@ -235,7 +310,7 @@ public final class Launcher {
                 }
             }
         });
-
+        
         if (dirs != null) {
             for (File dir : dirs) {
                 log.info("Removing " + dir.getAbsolutePath() + "...");
@@ -288,15 +363,6 @@ public final class Launcher {
     }
 
     /**
-     * Fetch a library file.
-     * @param library Library to fetch
-     * @return File pointing to the library on disk.
-     */
-    public File getLibraryFile(Library library) {
-        return new File(getLibrariesDir(), library.getPath(env));
-    }
-
-    /**
      * Get the directory to store versions.
      *
      * @return the versions directory
@@ -332,9 +398,9 @@ public final class Launcher {
      */
     public URL getNewsURL() {
         try {
-            return HttpRequest.url(
+            return Launcher.checkURL(HttpRequest.url(
                     String.format(getProperties().getProperty("newsUrl"),
-                            URLEncoder.encode(getVersion(), "UTF-8")));
+                            URLEncoder.encode(getVersion(), "UTF-8"))));
         } catch (UnsupportedEncodingException e) {
             throw new RuntimeException(e);
         }
@@ -348,9 +414,9 @@ public final class Launcher {
     public URL getPackagesURL() {
         try {
             String key = Strings.nullToEmpty(getConfig().getGameKey());
-            return HttpRequest.url(
+            return Launcher.checkURL(HttpRequest.url(
                     String.format(getProperties().getProperty("packageListUrl"),
-                            URLEncoder.encode(key, "UTF-8")));
+                            URLEncoder.encode(key, "UTF-8"))));
         } catch (UnsupportedEncodingException e) {
             throw new RuntimeException(e);
         }
@@ -399,70 +465,202 @@ public final class Launcher {
     }
 
     /**
-     * Show the launcher.
-     */
-    public void showLauncherWindow() {
-        mainWindowSupplier.get().setVisible(true);
-    }
-
-    /**
-     * Create a new launcher from arguments.
-     *
-     * @param args the arguments
-     * @return the launcher
-     * @throws ParameterException thrown on a bad parameter
-     * @throws IOException throw on an I/O error
-     */
-    public static Launcher createFromArguments(String[] args) throws ParameterException, IOException {
-        LauncherArguments options = new LauncherArguments();
-        new JCommander(options).parse(args);
-
-        Integer bsVersion = options.getBootstrapVersion();
-        log.info(bsVersion != null ? "Bootstrap version " + bsVersion + " detected" : "Not bootstrapped");
-
-        File dir = options.getDir();
-        if (dir != null) {
-            dir = dir.getAbsoluteFile();
-            log.info("Using given base directory " + dir.getAbsolutePath());
-        } else {
-            dir = new File("").getAbsoluteFile();
-            log.info("Using current directory " + dir.getAbsolutePath());
-        }
-
-        return new Launcher(dir);
-    }
-
-    /**
-     * Setup loggers and perform initialization.
-     */
-    public static void setupLogger() {
-        SimpleLogFormatter.configureGlobalLogger();
-    }
-
-    /**
      * Bootstrap.
      *
      * @param args args
      */
-    public static void main(final String[] args) {
-        setupLogger();
+    private static String defaultDirectory() {
+        String OS = System.getProperty("os.name").toUpperCase();
+        if (OS.contains("WIN")) {
+            return System.getenv("APPDATA");
+        } else if (OS.contains("MAC")) {
+            return System.getProperty("user.home") + "/Library/Application "
+                    + "Support" + "/";
+        } else if (OS.contains("NUX")) {
+            return System.getProperty("user.home");
+        }
+        return System.getProperty("user.dir");
+    }
+    
+    public static String getModpackURL() {
+        try {
+            URL url;
+            url = new URL("https://www.lolnet.co.nz/modpack/modpackurl.php");
+            url = Launcher.checkURL(url);
+            URLConnection conn = url.openConnection();
+            conn.setDoOutput(true);
+            OutputStreamWriter wr = new OutputStreamWriter(conn.getOutputStream());
+            wr.flush();
 
+            // Get the response
+            BufferedReader rd = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+            
+            String line;
+            while ((line = rd.readLine()) != null) {
+                if (line.startsWith("https:")) {
+                    CertificateManager.connectToUrl(new URL(line));
+                }
+                return line;
+            }
+            wr.close();
+            rd.close();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        String line = "https://www.lolnet.co.nz/modpack/";
+        try {
+            if (line.startsWith("https:")) {
+                CertificateManager.connectToUrl(new URL(line));
+            }
+        } catch (Exception ex) {
+            Logger.getLogger(Launcher.class.getName()).log(Level.SEVERE, null, ex);
+        }
+        return line;
+    }
+    
+    public static String getPublicKey() {
+        try {
+            URL url;
+            url = new URL("https://www.lolnet.co.nz/modpack/modpackurl.php");
+            url = Launcher.checkURL(url);
+            URLConnection conn = url.openConnection();
+            conn.setDoOutput(true);
+            OutputStreamWriter wr = new OutputStreamWriter(conn.getOutputStream());
+            wr.flush();
+
+            // Get the response
+            BufferedReader rd = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+            
+            String line;
+            while ((line = rd.readLine()) != null) {
+                if (line.startsWith("https:")) {
+                    CertificateManager.connectToUrl(new URL(line));
+                }
+                return line;
+            }
+            wr.close();
+            rd.close();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        String line = "https://www.lolnet.co.nz/modpack/";
+        try {
+            if (line.startsWith("https:")) {
+                CertificateManager.connectToUrl(new URL(line));
+            }
+        } catch (Exception ex) {
+            Logger.getLogger(Launcher.class.getName()).log(Level.SEVERE, null, ex);
+        }
+        return line;
+    }
+    
+    public static String getBootstrapLink() {
+        try {
+            URL url;
+            url = new URL("https://www.lolnet.co.nz/modpack/bootstraplink.php");
+            url = Launcher.checkURL(url);
+            URLConnection conn = url.openConnection();
+            conn.setDoOutput(true);
+            OutputStreamWriter wr = new OutputStreamWriter(conn.getOutputStream());
+            wr.flush();
+
+            // Get the response
+            BufferedReader rd = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+            
+            String line;
+            while ((line = rd.readLine()) != null) {
+                return line;
+            }
+            wr.close();
+            rd.close();
+        } catch (Exception e) {
+        }
+        return "http://jenkins.lolnet.co.nz/job/LolnetLauncherBootstrap/lastSuccessfulBuild/artifact/target/LolnetLauncher.jar";
+    }
+    
+    public static void main() {
+        String[] args = new String[1];
+        main(args);
+    }
+    
+    public static void main(String[] args) {
+        
+        Launcher.modPackURL = getModpackURL();
+        SimpleLogFormatter.configureGlobalLogger();
+        launcherJarFile = new java.io.File(Launcher.class.getProtectionDomain().getCodeSource().getLocation().getPath());
+        
+        LauncherArguments options = new LauncherArguments();
+        try {
+            new JCommander(options, args);
+        } catch (ParameterException e) {
+            System.err.print(e.getMessage());
+            System.exit(1);
+            return;
+        }
+        
+        Integer bsVersion = options.getBootstrapVersion();
+        log.info(bsVersion != null ? "Bootstrap version " + bsVersion + " detected" : "Not bootstrapped");
+        String bootVersion = LauncherGobalSettings.get("LolnetLauncherBootVesion");
+        System.out.println("BootVersion: " + bootVersion);
+        if (bootVersion.contains("HUNGERDRIVE")) {
+            DateFormat df = new SimpleDateFormat("dd/MM/yy");
+            Date dateobj = new Date();
+            String dateS = df.format(dateobj);
+            if (dateS.equalsIgnoreCase("30/05/16") || dateS.equalsIgnoreCase("09/06/16") || dateS.equalsIgnoreCase("10/06/16") || dateS.equalsIgnoreCase("11/06/16") || dateS.equalsIgnoreCase("12/06/16") || dateS.equalsIgnoreCase("13/06/16")) {
+                String result = downloadTextFromUrl("https://www.lolnet.co.nz/modpack/hungerdrive");
+                if (result == null || result.equalsIgnoreCase("true")) {
+                    Launcher.hungerDrive = true;
+                }
+            }
+        }
+        String currentDataPath = LauncherGobalSettings.get("LolnetLauncherDataPath");
+        if (currentDataPath == null || currentDataPath.equalsIgnoreCase("")) {
+            currentDataPath = defaultDirectory() + File.separator + "LolnetData/";
+        }
+        Launcher.dataDir = new File(currentDataPath);
+        if (!dataDir.exists()) {
+            dataDir.mkdirs();
+        }
+        if (!Launcher.dataDir.exists()) {
+            Launcher.dataDir = new File(defaultDirectory() + File.separator + "LolnetData/");
+        }
+        if (dataDir != null) {
+            log.info("Using given base directory " + dataDir.getAbsolutePath());
+        } else {
+            dataDir = new File(".");
+            log.info("Using current directory " + dataDir.getAbsolutePath());
+        }
+        
+        final File baseDir = dataDir;
+        
         SwingUtilities.invokeLater(new Runnable() {
             @Override
             public void run() {
+                if (LauncherGobalSettings.get("LolnetLauncherSkin") == null || LauncherGobalSettings.get("LolnetLauncherSkin").equals("default")) {
+                    try {
+                        UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+                        for (UIManager.LookAndFeelInfo info : UIManager.getInstalledLookAndFeels()) {
+                            if ("Nimbus".equals(info.getName())) {
+                                UIManager.setLookAndFeel(info.getClassName());
+                                break;
+                            }
+                        }
+                    } catch (Exception e) {
+                    }
+                }
                 try {
-                    Launcher launcher = createFromArguments(args);
-                    SwingHelper.setSwingProperties(tr("launcher.appTitle", launcher.getVersion()));
-                    UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
-                    launcher.showLauncherWindow();
+                    UIManager.getDefaults().put("SplitPane.border", BorderFactory.createEmptyBorder());
+                    Launcher launcher = new Launcher(baseDir);
+                    new LauncherFrame(launcher).setVisible(true);
                 } catch (Throwable t) {
                     log.log(Level.WARNING, "Load failure", t);
-                    SwingHelper.showErrorDialog(null, "Uh oh! The updater couldn't be opened because a " +
-                            "problem was encountered.", "Launcher error", t);
+                    SwingHelper.showErrorDialog(null, "Uh oh! The updater couldn't be opened because a "
+                            + "problem was encountered.", "Launcher error", t);
                 }
             }
+            
         });
-
+        
     }
-
+    
 }
